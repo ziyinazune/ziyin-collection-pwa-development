@@ -381,7 +381,7 @@ export default function App() {
                     value={query}
                     onChange={e=>setQuery(e.target.value)}
                     placeholder="搜索名称、标签、来源…"
-                    className="w-full h-10 pl-9 pr-3 rounded-2xl bg-zinc-100/80 border border-zinc-200/60 text-[14px] placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-violet-300"
+                    className="w-full h-10 pl-9 pr-3 rounded-2xl bg-zinc-100/80 border border-zinc-200 text-[14px] placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-violet-300"
                   />
                 </div>
                 <button onClick={()=>setShowAdd(true)} className="h-10 px-3 rounded-2xl bg-violet-600 text-white text-[13px] font-medium shadow-md shadow-violet-200 active:scale-[0.98] flex items-center gap-1">
@@ -866,7 +866,17 @@ function AddEditModal({ initial, categories, onClose, onSave, onDelete }:{
               <label className="text-[13px] font-medium flex items-center gap-1.5"><Camera className="size-4 text-violet-600" /> 拍照 / 相册</label>
               <span className="text-[11px] text-zinc-500">自动居中 · 美观卡片</span>
             </div>
-            <button onClick={()=>fileRef.current?.click()} className="w-full aspect-[16/9] rounded-[20px] border-2 border-dashed border-violet-200 bg-violet-50/50 overflow-hidden relative group">
+            
+            {/* Camera Button */}
+            <button 
+              onClick={()=>{
+                if (fileRef.current) {
+                  fileRef.current.removeAttribute('capture');
+                  fileRef.current.click();
+                }
+              }} 
+              className="w-full aspect-[16/9] rounded-[20px] border-2 border-dashed border-violet-200 bg-violet-50/50 overflow-hidden relative group mb-2"
+            >
               {form.image ? (
                 <>
                   <img src={form.image} className="w-full h-full object-cover" />
@@ -878,13 +888,52 @@ function AddEditModal({ initial, categories, onClose, onSave, onDelete }:{
                 <div className="w-full h-full grid place-items-center text-violet-600">
                   <div className="text-center">
                     <ImageIcon className="size-8 mx-auto mb-1.5 opacity-70" />
-                    <p className="text-[13px] font-medium">点击上传图片</p>
-                    <p className="text-[11px] text-zinc-500 mt-0.5">支持拍照、相册</p>
+                    <p className="text-[13px] font-medium">点击选择图片</p>
+                    <p className="text-[11px] text-zinc-500 mt-0.5">支持拍照、相册、文件</p>
                   </div>
                 </div>
               )}
             </button>
-            <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={e=>{const f=e.target.files?.[0]; if(f) handleImage(f)}} />
+
+            {/* Action Buttons */}
+            <div className="grid grid-cols-2 gap-2">
+              <button 
+                onClick={()=>{
+                  if (fileRef.current) {
+                    fileRef.current.setAttribute('capture', 'environment');
+                    fileRef.current.click();
+                  }
+                }}
+                className="h-10 rounded-xl bg-gradient-to-r from-violet-500 to-fuchsia-500 text-white text-[13px] font-medium flex items-center justify-center gap-1.5 shadow-md shadow-violet-200 active:scale-[0.98] transition"
+              >
+                <Camera className="size-4" /> 拍照
+              </button>
+              <button 
+                onClick={()=>{
+                  if (fileRef.current) {
+                    fileRef.current.removeAttribute('capture');
+                    fileRef.current.click();
+                  }
+                }}
+                className="h-10 rounded-xl bg-zinc-100 text-zinc-700 text-[13px] font-medium flex items-center justify-center gap-1.5 active:scale-[0.98] transition"
+              >
+                <ImageIcon className="size-4" /> 相册/文件
+              </button>
+            </div>
+
+            {/* Hidden File Input - supports camera, photo library and files */}
+            <input 
+              ref={fileRef} 
+              type="file" 
+              accept="image/*" 
+              className="hidden" 
+              onChange={e=>{
+                const f=e.target.files?.[0]; 
+                if(f) handleImage(f);
+                // Reset input to allow selecting same file again
+                e.target.value = '';
+              }} 
+            />
           </div>
 
           {/* Basic */}
