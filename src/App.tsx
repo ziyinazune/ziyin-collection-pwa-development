@@ -7,7 +7,7 @@ import {
 } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import {
-  Camera, Plus, Search, Grid3X3, Calendar as CalendarIcon, PieChart as PieIcon, SlidersHorizontal, X, Trash2, Tag as TagIcon, Clock, TrendingUp, PiggyBank, Check, ChevronLeft, ChevronRight, Download, Upload, Sparkles, BookOpen, Gamepad2, Laptop, ShoppingBag, Heart, Layers, Timer, BadgePercent, Image as ImageIcon, MoreVertical,
+  Camera, Plus, Search, Grid3X3, Calendar as CalendarIcon, PieChart as PieIcon, SlidersHorizontal, X, Trash2, Tag as TagIcon, Clock, TrendingUp, PiggyBank, Check, ChevronLeft, ChevronRight, Download, Upload, Sparkles, BookOpen, Gamepad2, Laptop, ShoppingBag, Heart, Layers, Timer, BadgePercent, Image as ImageIcon, MoreVertical, RotateCw,
 } from "lucide-react";
 
 type CollectionItem = {
@@ -254,6 +254,83 @@ function StarRating({
   return (
     <div className="flex items-center gap-0.5">
       {stars}
+    </div>
+  );
+}
+
+// 可翻转的资产总览卡片组件
+function AssetOverviewCard({ stats }: { stats: any }) {
+  const [isFlipped, setIsFlipped] = useState(false);
+
+  return (
+    <div 
+      className="relative h-[180px] cursor-pointer perspective-1000"
+      onClick={() => setIsFlipped(!isFlipped)}
+    >
+      <div className={cn(
+        "relative w-full h-full transition-transform duration-500 transform-style-preserve-3d",
+        isFlipped ? "rotate-y-180" : ""
+      )}>
+        {/* 正面：总价值 */}
+        <div className="absolute inset-0 backface-hidden">
+          <div className="h-full rounded-[28px] p-4 text-white shadow-lg overflow-hidden relative" style={{background: "linear-gradient(135deg,#667eea 0%,#764ba2 100%)"}}>
+            <div className="absolute -right-8 -top-8 size-32 rounded-full bg-white/10 blur-2xl" />
+            <div className="absolute right-3 top-3 opacity-60">
+              <RotateCw className="size-4" />
+            </div>
+            
+            <div className="relative h-full flex flex-col justify-between">
+              <div>
+                <p className="text-[12px] opacity-90 flex items-center gap-1">
+                  <BadgePercent className="size-3.5" /> 总价值
+                </p>
+                <p className="mt-2 text-[36px] font-semibold tracking-tight">¥{stats.totalOriginal.toFixed(2)}</p>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-white/20 backdrop-blur-sm rounded-xl p-2">
+                  <p className="text-[10px] opacity-80">日均成本</p>
+                  <p className="text-[16px] font-semibold mt-0.5">¥{stats.avgDailyCost.toFixed(2)}</p>
+                </div>
+                <div className="bg-white/20 backdrop-blur-sm rounded-xl p-2">
+                  <p className="text-[10px] opacity-80">总藏品</p>
+                  <p className="text-[16px] font-semibold mt-0.5">{stats.totalItems} 件</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 背面：白嫖存钱罐和实付 */}
+        <div className="absolute inset-0 backface-hidden rotate-y-180">
+          <div className="h-full rounded-[28px] p-4 text-white shadow-lg overflow-hidden relative" style={{background: "linear-gradient(135deg,#f093fb 0%,#f5576c 100%)"}}>
+            <div className="absolute -right-8 -top-8 size-32 rounded-full bg-white/10 blur-2xl" />
+            <div className="absolute right-3 top-3 opacity-60">
+              <RotateCw className="size-4" />
+            </div>
+            
+            <div className="relative h-full flex flex-col justify-between">
+              <div>
+                <p className="text-[12px] opacity-90 flex items-center gap-1">
+                  <PiggyBank className="size-3.5" /> 白嫖存钱罐
+                </p>
+                <p className="mt-2 text-[32px] font-semibold tracking-tight">¥{stats.freeSaved.toFixed(2)}</p>
+                <p className="text-[11px] opacity-80 mt-1">累计省下的钱</p>
+              </div>
+              
+              <div className="bg-white/20 backdrop-blur-sm rounded-xl p-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <ShoppingBag className="size-3.5" />
+                    <span className="text-[11px] opacity-90">实付金额</span>
+                  </div>
+                  <span className="text-[18px] font-semibold">¥{stats.totalPurchase.toFixed(2)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -708,34 +785,8 @@ export default function App() {
           {/* STATS */}
           {tab === "stats" && (
             <div className="pt-3 space-y-3">
-              {/* Piggy bank */}
-              <div className="relative overflow-hidden rounded-[28px] p-4 text-white shadow-lg" style={{background: "linear-gradient(135deg,#8b5cf6 0%,#ec4899 100%)"}}>
-                <div className="absolute -right-8 -top-8 size-32 rounded-full bg-white/10 blur-2xl" />
-                <div className="relative flex items-start justify-between">
-                  <div>
-                    <p className="text-[12px] opacity-90 flex items-center gap-1"><PiggyBank className="size-3.5" /> 白嫖存钱罐</p>
-                    <p className="mt-1 text-[32px] font-semibold tracking-tight">¥{stats.freeSaved.toFixed(2)}</p>
-                    <p className="text-[11px] opacity-80 mt-0.5">累计省下的钱 · 长期主义</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-[11px] opacity-80">总藏品</p>
-                    <p className="text-[20px] font-semibold">{stats.totalItems}</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-2.5">
-                {[
-                  {label:"总原价", value:`¥${stats.totalOriginal.toFixed(2)}`, icon: BadgePercent},
-                  {label:"实付", value:`¥${stats.totalPurchase.toFixed(2)}`, icon: ShoppingBag},
-                  {label:"日均成本", value:`¥${stats.avgDailyCost.toFixed(2)}`, icon: Timer},
-                ].map(c=>(
-                  <div key={c.label} className="bg-white rounded-2xl border border-zinc-100 p-3 shadow-sm">
-                    <div className="flex items-center gap-1 text-zinc-500 text-[11px]"><c.icon className="size-3.5" /> {c.label}</div>
-                    <div className="mt-1 text-[16px] font-semibold tracking-tight">{c.value}</div>
-                  </div>
-                ))}
-              </div>
+              {/* 资产总览 - 可翻转卡片 */}
+              <AssetOverviewCard stats={stats} />
 
               <div className="bg-white rounded-[24px] border border-zinc-100 shadow-sm p-3">
                 <h3 className="text-[14px] font-medium">分类价值占比</h3>
@@ -971,7 +1022,7 @@ function AddEditModal({ initial, categories, onClose, onSave, onDelete }:{
                 </div>
               )}
             </button>
-            <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={e=>{const f=e.target.files?.[0]; if(f) handleImage(f)}} />
+            <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={e=>{const f=e.target.files?.[0]; if(f) handleImage(f)}} />
           </div>
 
           {/* Basic */}
