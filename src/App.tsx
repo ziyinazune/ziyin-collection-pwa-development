@@ -27,6 +27,7 @@ type CollectionItem = {
   isFree: boolean;
   courseTotal?: number;
   courseCompleted?: number;
+  rating?: number; // 评分 0-5，支持 0.5 步进
 };
 
 const DEFAULT_CATEGORIES = [
@@ -56,6 +57,7 @@ const EXAMPLE_ITEMS: CollectionItem[] = [
     isFree: true,
     courseTotal: 20,
     courseCompleted: 12,
+    rating: 4.5,
   },
   {
     id: "c2",
@@ -70,6 +72,7 @@ const EXAMPLE_ITEMS: CollectionItem[] = [
     source: "Epic Games",
     notes: "年度神作，白嫖快乐",
     isFree: true,
+    rating: 5,
   },
   {
     id: "c3",
@@ -85,6 +88,7 @@ const EXAMPLE_ITEMS: CollectionItem[] = [
     expiryDate: "2025-12-01",
     notes: "省290",
     isFree: false,
+    rating: 4,
   },
   {
     id: "c4",
@@ -183,6 +187,77 @@ function cn(...c: (string | false | undefined)[]) {
   return c.filter(Boolean).join(" ");
 }
 
+// 星级评分组件
+function StarRating({ 
+  value, 
+  onChange, 
+  readonly = false,
+  size = "sm"
+}: { 
+  value?: number; 
+  onChange?: (rating: number) => void;
+  readonly?: boolean;
+  size?: "sm" | "md" | "lg";
+}) {
+  const [hoverValue, setHoverValue] = useState<number | null>(null);
+  
+  const stars = [];
+  const displayValue = hoverValue ?? value ?? 0;
+  
+  const starSize = size === "sm" ? "size-4" : size === "md" ? "size-5" : "size-6";
+  
+  for (let i = 1; i <= 5; i++) {
+    const isFull = displayValue >= i;
+    const isHalf = !isFull && displayValue >= i - 0.5;
+    
+    stars.push(
+      <div key={i} className="relative">
+        {/* 空心星背景 */}
+        <svg className={cn(starSize, "text-zinc-300")} viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+        </svg>
+        
+        {/* 实心星覆盖层 */}
+        {(isFull || isHalf) && (
+          <div className="absolute inset-0 overflow-hidden" style={{ width: isFull ? '100%' : '50%' }}>
+            <svg className={cn(starSize, "text-amber-400")} viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+            </svg>
+          </div>
+        )}
+        
+        {/* 点击区域 - 左半部分（半星）和右半部分（整星） */}
+        {!readonly && (
+          <>
+            <button
+              type="button"
+              onClick={() => onChange?.(i - 0.5)}
+              onMouseEnter={() => setHoverValue(i - 0.5)}
+              onMouseLeave={() => setHoverValue(null)}
+              className="absolute inset-0 w-1/2 h-full cursor-pointer"
+              aria-label={`${i - 0.5}星`}
+            />
+            <button
+              type="button"
+              onClick={() => onChange?.(i)}
+              onMouseEnter={() => setHoverValue(i)}
+              onMouseLeave={() => setHoverValue(null)}
+              className="absolute inset-0 left-1/2 w-1/2 h-full cursor-pointer"
+              aria-label={`${i}星`}
+            />
+          </>
+        )}
+      </div>
+    );
+  }
+  
+  return (
+    <div className="flex items-center gap-0.5">
+      {stars}
+    </div>
+  );
+}
+
 export default function App() {
   const [items, setItems] = useState<CollectionItem[]>([]);
   const [categories, setCategories] = useState(() => DEFAULT_CATEGORIES.map(c => c.name));
@@ -258,18 +333,22 @@ export default function App() {
 
     const freeSaved = items.reduce((s,i) => {
       if (i.isFree) {
+        // 课程类：根据完成进度计算已省金额
         if (i.category === "课程" && i.courseTotal) {
           const per = i.originalPrice / i.courseTotal;
           return s + per * (i.courseCompleted || 0) * i.quantity;
         }
+        // 其他白嫖物品：直接使用原价
         return s + i.originalPrice * i.quantity;
       }
+      // 非白嫖物品：计算差价
       return s + Math.max(0, i.originalPrice - i.purchasePrice) * i.quantity;
     }, 0);
 
     const byCategory = categories.map(cat => {
       const list = items.filter(i => i.category === cat);
-      const value = list.reduce((s,i) => s + i.purchasePrice * i.quantity, 0);
+      // 使用原价计算分类价值占比
+      const value = list.reduce((s,i) => s + i.originalPrice * i.quantity, 0);
       const count = list.length;
       const avg = count ? Math.round(value / count) : 0;
       return { name: cat, value, count, avg };
@@ -472,6 +551,14 @@ export default function App() {
                         </div>
                         <div className="p-2.5">
                           <h3 className="text-[13.5px] font-medium leading-snug line-clamp-1">{item.name}</h3>
+                          
+                          {/* 评分显示 */}
+                          {item.rating && item.rating > 0 ? (
+                            <div className="mt-1.5">
+                              <StarRating value={item.rating} readonly size="sm" />
+                            </div>
+                          ) : null}
+                          
                           <div className="mt-1.5 flex items-baseline justify-between">
                             <div className="flex items-baseline gap-1">
                               {item.isFree ? (
@@ -627,7 +714,7 @@ export default function App() {
                 <div className="relative flex items-start justify-between">
                   <div>
                     <p className="text-[12px] opacity-90 flex items-center gap-1"><PiggyBank className="size-3.5" /> 白嫖存钱罐</p>
-                    <p className="mt-1 text-[32px] font-semibold tracking-tight">¥{Math.round(stats.freeSaved).toLocaleString()}</p>
+                    <p className="mt-1 text-[32px] font-semibold tracking-tight">¥{stats.freeSaved.toFixed(2)}</p>
                     <p className="text-[11px] opacity-80 mt-0.5">累计省下的钱 · 长期主义</p>
                   </div>
                   <div className="text-right">
@@ -639,8 +726,8 @@ export default function App() {
 
               <div className="grid grid-cols-3 gap-2.5">
                 {[
-                  {label:"总原价", value:`¥${Math.round(stats.totalOriginal).toLocaleString()}`, icon: BadgePercent},
-                  {label:"实付", value:`¥${Math.round(stats.totalPurchase).toLocaleString()}`, icon: ShoppingBag},
+                  {label:"总原价", value:`¥${stats.totalOriginal.toFixed(2)}`, icon: BadgePercent},
+                  {label:"实付", value:`¥${stats.totalPurchase.toFixed(2)}`, icon: ShoppingBag},
                   {label:"日均成本", value:`¥${stats.avgDailyCost.toFixed(2)}`, icon: Timer},
                 ].map(c=>(
                   <div key={c.label} className="bg-white rounded-2xl border border-zinc-100 p-3 shadow-sm">
@@ -884,7 +971,7 @@ function AddEditModal({ initial, categories, onClose, onSave, onDelete }:{
                 </div>
               )}
             </button>
-            <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={e=>{const f=e.target.files?.[0]; if(f) handleImage(f)}} />
+            <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={e=>{const f=e.target.files?.[0]; if(f) handleImage(f)}} />
           </div>
 
           {/* Basic */}
@@ -951,13 +1038,39 @@ function AddEditModal({ initial, categories, onClose, onSave, onDelete }:{
               </div>
             </div>
 
+            {/* 评分 */}
+            <div>
+              <label className="text-[12px] text-zinc-600 flex items-center gap-1.5">
+                <span>评分</span>
+                {form.rating && form.rating > 0 && (
+                  <span className="text-[11px] text-amber-600 font-medium">{form.rating.toFixed(1)} 分</span>
+                )}
+              </label>
+              <div className="mt-1 p-2.5 rounded-xl bg-zinc-50 border border-zinc-200">
+                <StarRating 
+                  value={form.rating || 0} 
+                  onChange={(rating) => setForm({...form, rating})}
+                  size="md"
+                />
+                {form.rating && form.rating > 0 && (
+                  <button 
+                    type="button"
+                    onClick={() => setForm({...form, rating: undefined})}
+                    className="mt-1.5 text-[11px] text-zinc-500 hover:text-red-500 transition-colors"
+                  >
+                    清除评分
+                  </button>
+                )}
+              </div>
+            </div>
+
             <div>
               <label className="text-[12px] text-zinc-600 flex items-center gap-1"><TagIcon className="size-3.5" /> 标签 (逗号分隔)</label>
               <input value={tagInput} onChange={e=>setTagInput(e.target.value)} placeholder="白嫖,限时,生产力" className="mt-1 w-full h-11 px-3 rounded-xl bg-zinc-50 border border-zinc-200 text-[14px]" />
             </div>
 
             <div>
-              <label className="text-[12px] text-zinc-600">备注</label>
+              <label className="text-[12px] text-zinc-600">评语</label>
               <textarea value={form.notes||""} onChange={e=>setForm({...form, notes:e.target.value})} rows={2} placeholder="记录心得、使用感受..." className="mt-1 w-full px-3 py-2 rounded-xl bg-zinc-50 border border-zinc-200 text-[14px] resize-none" />
             </div>
           </div>
