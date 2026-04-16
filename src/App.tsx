@@ -451,8 +451,20 @@ export default function App() {
       days: differenceInDays(parseISO(i.expiryDate!), now)
     })).filter(i => i.days <= 30).sort((a,b) => a.days - b.days);
 
-    const totalDays = items.reduce((s,i) => s + Math.max(1, differenceInDays(now, parseISO(i.purchaseDate))), 0);
-    const avgDailyCost = totalDays ? totalPurchase / totalDays : 0;
+    // 计算日均成本：只统计未过期商品的日均成本之和
+    const avgDailyCost = items.reduce((sum, i) => {
+      // 如果有保质期且已过期，跳过该商品
+      if (i.expiryDate && isBefore(parseISO(i.expiryDate), now)) {
+        return sum;
+      }
+      
+      // 计算单个商品的持有天数
+      const daysHeld = Math.max(1, differenceInDays(now, parseISO(i.purchaseDate)));
+      
+      // 计算单个商品的日均成本并累加
+      const itemDailyCost = (i.purchasePrice * i.quantity) / daysHeld;
+      return sum + itemDailyCost;
+    }, 0);
 
     return { totalOriginal, totalPurchase, totalSavedDiff, freeSaved, byCategory, monthly, expiring, avgDailyCost, totalItems: items.length };
   }, [items, categories]);
