@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import imageCompression from "browser-image-compression";
 import {
   PieChart, Pie, Cell, ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid,
 } from "recharts";
@@ -27,6 +28,10 @@ type CollectionItem = {
   isFree: boolean;
   courseTotal?: number;
   courseCompleted?: number;
+  useUsageCost?: boolean;
+  usageType?: "days" | "times" | "custom";
+  usageCount?: number;
+  usageUnit?: string;
   rating?: number; // 评分 0-5，支持 0.5 步进
 };
 
@@ -182,9 +187,189 @@ const EXAMPLE_ITEMS: CollectionItem[] = [
 
 const STORAGE_KEY = "ziyin_collection_v2";
 const CATEGORY_KEY = "ziyin_categories_v2";
+const DB_NAME = "ziyin_collection_db";
+const DB_VERSION = 1;
+const ITEMS_STORE = "items";
+const META_STORE = "meta";
+const META_ITEMS_KEY = "items";
+const META_CATEGORIES_KEY = "categories";
+
+function openDb() {
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(ITEMS_STORE)) {
+        db.createObjectStore(ITEMS_STORE, { keyPath: "id" });
+      }
+      if (!db.objectStoreNames.contains(META_STORE)) {
+        db.createObjectStore(META_STORE);
+      }
+    };
+
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function getDbValue<T>(storeName: string, key: IDBValidKey) {
+  const db = await openDb();
+  return new Promise<T | undefined>((resolve, reject) => {
+    const tx = db.transaction(storeName, "readonly");
+    const store = tx.objectStore(storeName);
+    const request = store.get(key);
+
+    request.onsuccess = () => resolve(request.result as T | undefined);
+    request.onerror = () => reject(request.error);
+    tx.oncomplete = () => db.close();
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error);
+    };
+    tx.onabort = () => {
+      db.close();
+      reject(tx.error);
+    };
+  });
+}
+
+async function getAllDbValues<T>(storeName: string) {
+  const db = await openDb();
+  return new Promise<T[]>((resolve, reject) => {
+    const tx = db.transaction(storeName, "readonly");
+    const store = tx.objectStore(storeName);
+    const request = store.getAll();
+
+    request.onsuccess = () => resolve(request.result as T[]);
+    request.onerror = () => reject(request.error);
+    tx.oncomplete = () => db.close();
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error);
+    };
+    tx.onabort = () => {
+      db.close();
+      reject(tx.error);
+    };
+  });
+}
+
+async function operateOnDbItem(
+  operation: "add" | "put" | "delete",
+  itemOrId: CollectionItem | string
+) {
+  const db = await openDb();
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(ITEMS_STORE, "readwrite");
+    const store = tx.objectStore(ITEMS_STORE);
+    let request: IDBRequest;
+
+    switch (operation) {
+      case "add":
+        request = store.add(itemOrId as CollectionItem);
+        break;
+      case "put":
+        request = store.put(itemOrId as CollectionItem);
+        break;
+      case "delete":
+        request = store.delete(itemOrId as string);
+        break;
+    }
+
+    request.onerror = () => reject(request.error);
+    tx.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error);
+    };
+    tx.onabort = () => {
+      db.close();
+      reject(tx.error);
+    };
+  });
+}
+
+async function deleteDbItems(ids: string[]) {
+  const db = await openDb();
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(ITEMS_STORE, "readwrite");
+    const store = tx.objectStore(ITEMS_STORE);
+    ids.forEach(id => store.delete(id));
+    
+    tx.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error);
+    };
+    tx.onabort = () => {
+      db.close();
+      reject(tx.error);
+    };
+  });
+}
+
+async function setDbValue(storeName: string, value: any, key?: IDBValidKey) {
+  const db = await openDb();
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(storeName, "readwrite");
+    const store = tx.objectStore(storeName);
+    const request = key === undefined ? store.put(value) : store.put(value, key);
+
+    request.onerror = () => reject(request.error);
+    tx.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error);
+    };
+    tx.onabort = () => {
+      db.close();
+      reject(tx.error);
+    };
+  });
+}
 
 function cn(...c: (string | false | undefined)[]) {
   return c.filter(Boolean).join(" ");
+}
+
+function getPiggyBankSaved(item: CollectionItem) {
+  if (item.category === "课程" && item.courseTotal) {
+    const completed = Math.min(item.courseCompleted || 0, item.courseTotal);
+    const perLessonSaved = Math.max(0, item.originalPrice - item.purchasePrice) / item.courseTotal;
+    return perLessonSaved * completed * item.quantity;
+  }
+
+  if (item.isFree) {
+    return item.originalPrice * item.quantity;
+  }
+
+  return Math.max(0, item.originalPrice - item.purchasePrice) * item.quantity;
+}
+
+function getDailyCost(item: CollectionItem) {
+  const diff = Math.max(0, item.originalPrice - item.purchasePrice) * item.quantity;
+  if (item.useUsageCost && (item.usageCount || 0) > 0) {
+    return diff / (item.usageCount || 1);
+  }
+  const daysHeld = Math.max(1, differenceInDays(new Date(), parseISO(item.purchaseDate)));
+  return (item.purchasePrice * item.quantity) / daysHeld;
+}
+
+function getUsageCostLabel(item: CollectionItem) {
+  if (!item.useUsageCost || !(item.usageCount || 0)) return "";
+  if (item.usageType === "days") return `按使用天数 ${item.usageCount} 天`;
+  if (item.usageType === "times") return `按使用次数 ${item.usageCount} 次`;
+  return `按 ${item.usageCount}${item.usageUnit || "单位"}`;
 }
 
 // 星级评分组件
@@ -289,7 +474,7 @@ function AssetOverviewCard({ stats }: { stats: any }) {
               
               <div className="grid grid-cols-2 gap-2">
                 <div className="bg-white/20 backdrop-blur-sm rounded-xl p-2">
-                  <p className="text-[10px] opacity-80">日均成本</p>
+                  <p className="text-[10px] opacity-80">当前总日均成本</p>
                   <p className="text-[16px] font-semibold mt-0.5">¥{stats.avgDailyCost.toFixed(2)}</p>
                 </div>
                 <div className="bg-white/20 backdrop-blur-sm rounded-xl p-2">
@@ -347,30 +532,32 @@ export default function App() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [batchMode, setBatchMode] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
+  const [dbReady, setDbReady] = useState(false);
+  const [dbLoaded, setDbLoaded] = useState(false);
 
   // load
   useEffect(() => {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
+    (async () => {
       try {
-        setItems(JSON.parse(raw));
+        const [storedItems, storedCategories] = await Promise.all([
+          getAllDbValues<CollectionItem>(ITEMS_STORE),
+          getDbValue<string[]>(META_STORE, META_CATEGORIES_KEY),
+        ]);
+
+        setItems(storedItems?.length ? storedItems : EXAMPLE_ITEMS);
+        if (storedCategories?.length) setCategories(storedCategories);
       } catch {
         setItems(EXAMPLE_ITEMS);
+      } finally {
+        setDbReady(true);
+        setDbLoaded(true);
       }
-    } else {
-      setItems(EXAMPLE_ITEMS);
-    }
-    const catRaw = localStorage.getItem(CATEGORY_KEY);
-    if (catRaw) {
-      try { setCategories(JSON.parse(catRaw)) } catch {}
-    }
+    })();
   }, []);
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-  }, [items]);
-  useEffect(() => {
-    localStorage.setItem(CATEGORY_KEY, JSON.stringify(categories));
-  }, [categories]);
+    if (!dbReady || !dbLoaded) return;
+    setDbValue(META_STORE, categories, META_CATEGORIES_KEY).catch(() => {});
+  }, [categories, dbReady, dbLoaded]);
 
   const filtered = useMemo(() => {
     let list = [...items];
@@ -408,19 +595,7 @@ export default function App() {
     const totalPurchase = items.reduce((s,i) => s + i.purchasePrice * i.quantity, 0);
     const totalSavedDiff = totalOriginal - totalPurchase;
 
-    const freeSaved = items.reduce((s,i) => {
-      if (i.isFree) {
-        // 课程类：根据完成进度计算已省金额
-        if (i.category === "课程" && i.courseTotal) {
-          const per = i.originalPrice / i.courseTotal;
-          return s + per * (i.courseCompleted || 0) * i.quantity;
-        }
-        // 其他白嫖物品：直接使用原价
-        return s + i.originalPrice * i.quantity;
-      }
-      // 非白嫖物品：计算差价
-      return s + Math.max(0, i.originalPrice - i.purchasePrice) * i.quantity;
-    }, 0);
+    const freeSaved = items.reduce((s,i) => s + getPiggyBankSaved(i), 0);
 
     const byCategory = categories.map(cat => {
       const list = items.filter(i => i.category === cat);
@@ -437,9 +612,7 @@ export default function App() {
       const cur = monthlyMap.get(m) || { month: m, count:0, value:0, saved:0 };
       cur.count += 1;
       cur.value += i.purchasePrice * i.quantity;
-      const saved = i.isFree
-        ? (i.category==="课程"&&i.courseTotal ? (i.originalPrice/i.courseTotal)*(i.courseCompleted||0) : i.originalPrice) * i.quantity
-        : Math.max(0, i.originalPrice - i.purchasePrice) * i.quantity;
+      const saved = getPiggyBankSaved(i);
       cur.saved += saved;
       monthlyMap.set(m, cur);
     });
@@ -451,19 +624,14 @@ export default function App() {
       days: differenceInDays(parseISO(i.expiryDate!), now)
     })).filter(i => i.days <= 30).sort((a,b) => a.days - b.days);
 
-    // 计算日均成本：只统计未过期商品的日均成本之和
+    // 计算日均成本：统计当前所有无到期/保质期商品的日均成本之和
     const avgDailyCost = items.reduce((sum, i) => {
-      // 如果有保质期且已过期，跳过该商品
-      if (i.expiryDate && isBefore(parseISO(i.expiryDate), now)) {
+      // 有到期/保质期的商品不计入总日均成本
+      if (i.expiryDate) {
         return sum;
       }
-      
-      // 计算单个商品的持有天数
-      const daysHeld = Math.max(1, differenceInDays(now, parseISO(i.purchaseDate)));
-      
-      // 计算单个商品的日均成本并累加
-      const itemDailyCost = (i.purchasePrice * i.quantity) / daysHeld;
-      return sum + itemDailyCost;
+
+      return sum + getDailyCost(i);
     }, 0);
 
     return { totalOriginal, totalPurchase, totalSavedDiff, freeSaved, byCategory, monthly, expiring, avgDailyCost, totalItems: items.length };
@@ -472,11 +640,14 @@ export default function App() {
   const categoryMeta = (name: string) => DEFAULT_CATEGORIES.find(c => c.name === name) || DEFAULT_CATEGORIES[DEFAULT_CATEGORIES.length-1];
 
   const handleSave = (item: CollectionItem) => {
-    setItems(prev => {
-      const exists = prev.find(p => p.id === item.id);
-      if (exists) return prev.map(p => p.id === item.id ? item : p);
-      return [item, ...prev];
-    });
+    const exists = items.some(p => p.id === item.id);
+    if (exists) {
+      setItems(prev => prev.map(p => p.id === item.id ? item : p));
+      operateOnDbItem("put", item).catch(err => console.error("Failed to update item in DB", err));
+    } else {
+      setItems(prev => [item, ...prev]);
+      operateOnDbItem("add", item).catch(err => console.error("Failed to add item to DB", err));
+    }
     setShowAdd(false);
     setEditing(null);
   };
@@ -484,6 +655,7 @@ export default function App() {
   const handleDelete = (id: string) => {
     if (!confirm("确定删除该收藏？")) return;
     setItems(prev => prev.filter(i => i.id !== id));
+    operateOnDbItem("delete", id).catch(err => console.error("Failed to delete item from DB", err));
     setEditing(null);
   };
 
@@ -607,10 +779,12 @@ export default function App() {
                 {filtered.map(item => {
                   const meta = categoryMeta(item.category);
                   const days = differenceInDays(new Date(), parseISO(item.purchaseDate));
-                  const daily = days > 0 ? (item.purchasePrice / days) : item.purchasePrice;
+                  const daily = getDailyCost(item);
+                  const usageLabel = getUsageCostLabel(item);
                   const isExpiring = item.expiryDate && differenceInDays(parseISO(item.expiryDate), new Date()) <= 30;
                   const isExpired = item.expiryDate && isBefore(parseISO(item.expiryDate), new Date());
                   const progress = item.category==="课程" && item.courseTotal ? Math.round(((item.courseCompleted||0)/item.courseTotal)*100) : 0;
+                  const itemSaved = getPiggyBankSaved(item);
                   const selected = selectedIds.includes(item.id);
                   return (
                     <div key={item.id} className={cn("group relative bg-white rounded-[22px] border overflow-hidden shadow-sm hover:shadow-md transition", selected ? "ring-2 ring-violet-500" : "border-zinc-100")}>
@@ -653,7 +827,7 @@ export default function App() {
                               {item.isFree ? (
                                 <>
                                   <span className="text-[11px] text-pink-600">省</span>
-                                  <span className="text-[16px] font-semibold text-pink-600">¥{item.originalPrice}</span>
+                                  <span className="text-[16px] font-semibold text-pink-600">¥{Math.round(itemSaved)}</span>
                                 </>
                               ) : (
                                 <>
@@ -674,12 +848,12 @@ export default function App() {
                               </div>
                               <div className="mt-1 flex justify-between text-[10px] text-zinc-500">
                                 <span>进度 {item.courseCompleted}/{item.courseTotal}</span>
-                                <span>已省 ¥{Math.round((item.courseCompleted||0)*(item.originalPrice/item.courseTotal))}</span>
+                                <span>已存 ¥{Math.round(itemSaved)}</span>
                               </div>
                             </div>
                           ) : (
                             <div className="mt-1.5 flex items-center justify-between text-[10px] text-zinc-500">
-                              <span>持有 {days}天</span>
+                              <span>{usageLabel || `持有 ${days}天`}</span>
                               <span>日均 ¥{daily.toFixed(2)}</span>
                             </div>
                           )}
@@ -707,6 +881,7 @@ export default function App() {
                     <div className="w-px h-5 bg-white/20" />
                     <button onClick={()=>{
                       if (!confirm(`删除 ${selectedIds.length} 项？`)) return;
+                      deleteDbItems(selectedIds).catch(err => console.error("Failed to batch delete from DB", err));
                       setItems(prev=>prev.filter(i=>!selectedIds.includes(i.id)));
                       setSelectedIds([]); setBatchMode(false);
                     }} className="flex items-center gap-1 text-[12px] px-2 h-7 rounded-lg bg-red-500">
@@ -765,7 +940,7 @@ export default function App() {
                       <img src={i.image} className="size-11 rounded-xl object-cover bg-zinc-100" />
                       <div className="flex-1 min-w-0">
                         <p className="text-[13px] font-medium truncate">{i.name}</p>
-                        <p className="text-[11px] text-zinc-500">{i.category} · {i.isFree ? `白嫖省¥${i.originalPrice}` : `¥${i.purchasePrice}`}</p>
+                        <p className="text-[11px] text-zinc-500">{i.category} · {i.isFree ? `存钱罐+¥${Math.round(getPiggyBankSaved(i))}` : `¥${i.purchasePrice}`}</p>
                       </div>
                       <ChevronRight className="size-4 text-zinc-400" />
                     </button>
@@ -988,16 +1163,33 @@ function AddEditModal({ initial, categories, onClose, onSave, onDelete }:{
   const [tagInput, setTagInput] = useState(initial?.tags.join(",") || "");
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const handleImage = (f: File) => {
-    const reader = new FileReader();
-    reader.onload = () => setForm({...form, image: reader.result as string});
-    reader.readAsDataURL(f);
+  const handleImage = async (f: File) => {
+    const options = {
+      maxSizeMB: 0.5,
+      maxWidthOrHeight: 1280,
+      useWebWorker: true,
+    };
+    try {
+      console.log(`Original image size: ${(f.size / 1024 / 1024).toFixed(2)} MB`);
+      const compressedFile = await imageCompression(f, options);
+      console.log(`Compressed image size: ${(compressedFile.size / 1024 / 1024).toFixed(2)} MB`);
+      const reader = new FileReader();
+      reader.onload = () => setForm({ ...form, image: reader.result as string });
+      reader.readAsDataURL(compressedFile);
+    } catch (error) {
+      console.error("Image compression error:", error);
+      // 如果压缩失败，则使用原图
+      const reader = new FileReader();
+      reader.onload = () => setForm({ ...form, image: reader.result as string });
+      reader.readAsDataURL(f);
+    }
   };
 
   const daysHeld = differenceInDays(new Date(), parseISO(form.purchaseDate));
-  const dailyCost = daysHeld > 0 ? form.purchasePrice / daysHeld : form.purchasePrice;
+  const dailyCost = getDailyCost(form);
+  const usageLabel = getUsageCostLabel(form);
 
-  const perLesson = (form.category==="课程" && form.courseTotal) ? (form.originalPrice / form.courseTotal) : 0;
+  const perLesson = (form.category==="课程" && form.courseTotal) ? (Math.max(0, form.originalPrice - form.purchasePrice) / form.courseTotal) : 0;
   const savedCourse = (form.category==="课程" && form.courseTotal) ? perLesson * (form.courseCompleted||0) : 0;
 
   return (
@@ -1034,7 +1226,7 @@ function AddEditModal({ initial, categories, onClose, onSave, onDelete }:{
                 </div>
               )}
             </button>
-            <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={e=>{const f=e.target.files?.[0]; if(f) handleImage(f)}} />
+            <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={e=>{const f=e.target.files?.[0]; if(f) handleImage(f).catch(console.error)}} />
           </div>
 
           {/* Basic */}
@@ -1136,6 +1328,67 @@ function AddEditModal({ initial, categories, onClose, onSave, onDelete }:{
               <label className="text-[12px] text-zinc-600">评语</label>
               <textarea value={form.notes||""} onChange={e=>setForm({...form, notes:e.target.value})} rows={2} placeholder="记录心得、使用感受..." className="mt-1 w-full px-3 py-2 rounded-xl bg-zinc-50 border border-zinc-200 text-[14px] resize-none" />
             </div>
+
+            <div className="rounded-[20px] border border-emerald-200 bg-emerald-50/60 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h4 className="text-[13px] font-medium text-emerald-700">灵活日均成本计算</h4>
+                  <p className="text-[11px] text-zinc-500 mt-0.5">勾选后优先按 (原价-购入价) ÷ 使用天数/次数/自定义单位 计算</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={!!form.useUsageCost}
+                  onChange={e=>setForm({
+                    ...form,
+                    useUsageCost: e.target.checked,
+                    usageType: e.target.checked ? (form.usageType || "days") : undefined,
+                    usageCount: e.target.checked ? (form.usageCount || 0) : undefined,
+                    usageUnit: e.target.checked ? form.usageUnit : undefined,
+                  })}
+                  className="size-4 accent-emerald-500"
+                />
+              </div>
+
+              {form.useUsageCost && (
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[11px] text-zinc-600">计算方式</label>
+                    <select
+                      value={form.usageType || "days"}
+                      onChange={e=>setForm({...form, usageType: e.target.value as CollectionItem["usageType"], usageUnit: e.target.value === "custom" ? (form.usageUnit || "") : undefined})}
+                      className="mt-1 w-full h-10 px-3 rounded-xl bg-white border border-emerald-200 text-[14px]"
+                    >
+                      <option value="days">按天数</option>
+                      <option value="times">按次数</option>
+                      <option value="custom">自定义单位</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[11px] text-zinc-600">数量</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={form.usageCount || ""}
+                      onChange={e=>setForm({...form, usageCount: parseInt(e.target.value)||0})}
+                      className="mt-1 w-full h-10 px-3 rounded-xl bg-white border border-emerald-200 text-[14px]"
+                      placeholder="请输入数量"
+                    />
+                  </div>
+
+                  {form.usageType === "custom" && (
+                    <div className="col-span-2">
+                      <label className="text-[11px] text-zinc-600">自定义单位</label>
+                      <input
+                        value={form.usageUnit || ""}
+                        onChange={e=>setForm({...form, usageUnit: e.target.value})}
+                        className="mt-1 w-full h-10 px-3 rounded-xl bg-white border border-emerald-200 text-[14px]"
+                        placeholder="例如：片 / 次直播 / 次按摩"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* 课程白嫖 */}
@@ -1155,11 +1408,11 @@ function AddEditModal({ initial, categories, onClose, onSave, onDelete }:{
               {form.courseTotal && form.originalPrice>0 && (
                 <div className="mt-2.5 p-2.5 rounded-xl bg-white border border-violet-100">
                   <div className="flex justify-between text-[12px]">
-                    <span>每节价值</span>
+                    <span>每节存入</span>
                     <span className="font-medium text-violet-700">¥{perLesson.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between text-[12px] mt-1">
-                    <span>已省金额</span>
+                    <span>已存金额</span>
                     <span className="font-semibold text-pink-600">¥{savedCourse.toFixed(2)}</span>
                   </div>
                   <div className="mt-2 flex items-center gap-2">
@@ -1183,6 +1436,7 @@ function AddEditModal({ initial, categories, onClose, onSave, onDelete }:{
               <div className="p-2 rounded-xl bg-white border border-zinc-100">
                 <p className="text-[11px] text-zinc-500">日均成本</p>
                 <p className="text-[15px] font-semibold">¥{dailyCost.toFixed(2)}</p>
+                {usageLabel && <p className="text-[10px] text-emerald-600 mt-1">{usageLabel}</p>}
               </div>
               <div className="p-2 rounded-xl bg-white border border-zinc-100">
                 <p className="text-[11px] text-zinc-500">节省</p>
@@ -1199,6 +1453,10 @@ function AddEditModal({ initial, categories, onClose, onSave, onDelete }:{
           <button onClick={onClose} className="h-11 px-4 rounded-xl bg-zinc-100 text-zinc-700 text-[14px] font-medium ml-auto">取消</button>
           <button onClick={()=>{
             if (!form.name.trim()) { alert("请填写名称"); return; }
+            if (form.useUsageCost) {
+              if (!(form.usageCount && form.usageCount > 0)) { alert("请填写有效的使用数量"); return; }
+              if (form.usageType === "custom" && !(form.usageUnit || "").trim()) { alert("请填写自定义单位"); return; }
+            }
             const final = {...form, tags: tagInput.split(",").map(t=>t.trim()).filter(Boolean)};
             onSave(final);
           }} className="h-11 px-5 rounded-xl bg-violet-600 text-white text-[14px] font-medium shadow-md shadow-violet-200 flex items-center gap-1.5"><Check className="size-4" /> 保存</button>
