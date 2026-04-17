@@ -316,6 +316,21 @@ async function operateOnDbItem(
   });
 }
 
+async function replaceDbItems(items: CollectionItem[]) {
+  const db = await openDb();
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(ITEMS_STORE, "readwrite");
+    const store = tx.objectStore(ITEMS_STORE);
+    const clearReq = store.clear();
+    clearReq.onerror = reject;
+    clearReq.onsuccess = () => {
+      items.forEach(item => store.put(item));
+    };
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 async function deleteDbItems(ids: string[]) {
   const db = await openDb();
   return new Promise<void>((resolve, reject) => {
@@ -1113,7 +1128,20 @@ export default function App() {
                     <input type="file" accept="application/json" className="hidden" onChange={async e=>{
                       const f = e.target.files?.[0]; if(!f) return;
                       const txt = await f.text();
-                      try { const data = JSON.parse(txt); if(Array.isArray(data)){ setItems(data); alert("导入成功") } } catch { alert("导入失败") }
+                      try { 
+                        const data = JSON.parse(txt); 
+                        if(Array.isArray(data)){ 
+                          await replaceDbItems(data); // Persist to DB
+                          setItems(data); // Update UI
+                          localStorage.setItem(INIT_FLAG_KEY, "true"); // Set init flag
+                          alert("导入成功");
+                        } else {
+                          alert("导入失败：JSON文件格式不正确");
+                        }
+                      } catch { 
+                        alert("导入失败：无法解析文件");
+                      }
+                      e.target.value = ""; // Reset file input
                     }} />
                   </label>
                 </div>
