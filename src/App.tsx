@@ -193,6 +193,7 @@ const ITEMS_STORE = "items";
 const META_STORE = "meta";
 const META_ITEMS_KEY = "items";
 const META_CATEGORIES_KEY = "categories";
+const INIT_FLAG_KEY = "ziyin_collection_initialized";
 
 function openDb() {
   return new Promise<IDBDatabase>((resolve, reject) => {
@@ -244,6 +245,28 @@ async function getAllDbValues<T>(storeName: string) {
     request.onsuccess = () => resolve(request.result as T[]);
     request.onerror = () => reject(request.error);
     tx.oncomplete = () => db.close();
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error);
+    };
+    tx.onabort = () => {
+      db.close();
+      reject(tx.error);
+    };
+  });
+}
+
+async function addMultipleDbItems(items: CollectionItem[]) {
+  const db = await openDb();
+  return new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(ITEMS_STORE, "readwrite");
+    const store = tx.objectStore(ITEMS_STORE);
+    items.forEach(item => store.add(item));
+
+    tx.oncomplete = () => {
+      db.close();
+      resolve();
+    };
     tx.onerror = () => {
       db.close();
       reject(tx.error);
@@ -539,14 +562,29 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const [storedItems, storedCategories] = await Promise.all([
-          getAllDbValues<CollectionItem>(ITEMS_STORE),
-          getDbValue<string[]>(META_STORE, META_CATEGORIES_KEY),
-        ]);
-
-        setItems(storedItems?.length ? storedItems : EXAMPLE_ITEMS);
-        if (storedCategories?.length) setCategories(storedCategories);
-      } catch {
+        const isInitialized = localStorage.getItem(INIT_FLAG_KEY);
+        
+        if (!isInitialized) {
+          // First time launch: seed the DB with example items
+          await addMultipleDbItems(EXAMPLE_ITEMS);
+          await setDbValue(META_STORE, DEFAULT_CATEGORIES.map(c => c.name), META_CATEGORIES_KEY);
+          setItems(EXAMPLE_ITEMS);
+          setCategories(DEFAULT_CATEGORIES.map(c => c.name));
+          localStorage.setItem(INIT_FLAG_KEY, "true");
+        } else {
+          // Subsequent launches: load directly from DB
+          const [storedItems, storedCategories] = await Promise.all([
+            getAllDbValues<CollectionItem>(ITEMS_STORE),
+            getDbValue<string[]>(META_STORE, META_CATEGORIES_KEY),
+          ]);
+          setItems(storedItems || []);
+          if (storedCategories?.length) {
+            setCategories(storedCategories);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to initialize or load data:", err);
+        // Fallback to example items in case of critical error
         setItems(EXAMPLE_ITEMS);
       } finally {
         setDbReady(true);
