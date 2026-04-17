@@ -395,9 +395,8 @@ function getPiggyBankSaved(item: CollectionItem) {
 }
 
 function getDailyCost(item: CollectionItem) {
-  const diff = Math.max(0, item.originalPrice - item.purchasePrice) * item.quantity;
   if (item.useUsageCost && (item.usageCount || 0) > 0) {
-    return diff / (item.usageCount || 1);
+    return (item.purchasePrice * item.quantity) / (item.usageCount || 1);
   }
   const daysHeld = Math.max(1, differenceInDays(new Date(), parseISO(item.purchaseDate)));
   return (item.purchasePrice * item.quantity) / daysHeld;
