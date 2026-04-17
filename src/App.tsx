@@ -1398,7 +1398,7 @@ function AddEditModal({ initial, categories, onClose, onSave, onDelete }:{
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h4 className="text-[13px] font-medium text-emerald-700">灵活日均成本计算</h4>
-                  <p className="text-[11px] text-zinc-500 mt-0.5">勾选后优先按 (原价-购入价) ÷ 使用天数/次数/自定义单位 计算</p>
+                  <p className="text-[11px] text-zinc-500 mt-0.5">勾选后优先按 购入价 ÷ 使用天数/次数/自定义单位 计算</p>
                 </div>
                 <input
                   type="checkbox"
