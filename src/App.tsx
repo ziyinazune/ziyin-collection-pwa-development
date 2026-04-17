@@ -8,7 +8,7 @@ import {
 } from "date-fns";
 import { zhCN } from "date-fns/locale";
 import {
-  Camera, Plus, Search, Grid3X3, Calendar as CalendarIcon, PieChart as PieIcon, SlidersHorizontal, X, Trash2, Tag as TagIcon, Clock, TrendingUp, PiggyBank, Check, ChevronLeft, ChevronRight, Download, Upload, Sparkles, BookOpen, Gamepad2, Laptop, ShoppingBag, Heart, Layers, Timer, BadgePercent, Image as ImageIcon, MoreVertical, RotateCw,
+  Camera, Plus, Search, Grid3X3, Calendar as CalendarIcon, PieChart as PieIcon, SlidersHorizontal, X, Trash2, Tag as TagIcon, Clock, TrendingUp, PiggyBank, Check, ChevronLeft, ChevronRight, Download, Upload, Sparkles, BookOpen, Gamepad2, Laptop, ShoppingBag, Heart, Layers, Timer, BadgePercent, Image as ImageIcon, MoreVertical, RotateCw, KeyRound, UploadCloud,
 } from "lucide-react";
 
 type CollectionItem = {
@@ -572,8 +572,114 @@ export default function App() {
   const [dbReady, setDbReady] = useState(false);
   const [dbLoaded, setDbLoaded] = useState(false);
 
+  // Settings state
+  const [imgbbApiKey, setImgbbApiKey] = useState(() => localStorage.getItem("ziyin_imgbb_key") || "");
+  const [githubToken, setGithubToken] = useState(() => localStorage.getItem("ziyin_github_token") || "");
+  const [githubRepo, setGithubRepo] = useState(() => localStorage.getItem("ziyin_github_repo") || "");
+  const [autoBackupInterval, setAutoBackupInterval] = useState(() => localStorage.getItem("ziyin_autobackup_interval") || "never");
+  const [backupStatus, setBackupStatus] = useState("");
+
+  const handleGitHubBackup = async (isAuto = false) => {
+    if (!githubToken || !githubRepo) {
+      if (!isAuto) alert("请先配置 GitHub Token 和仓库地址。");
+      return;
+    }
+    if (!isAuto && !confirm("确定要将当前数据备份到 GitHub 吗？")) return;
+
+    setBackupStatus("正在备份...");
+    const [owner, repo] = githubRepo.split("/");
+    const path = "ziyin-collection-backup.json";
+    const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
+    const content = btoa(unescape(encodeURIComponent(JSON.stringify(items, null, 2))));
+    const headers = {
+      "Authorization": `token ${githubToken}`,
+      "Accept": "application/vnd.github.v3+json",
+    };
+
+    try {
+      // Try to get the file first to get its SHA
+      let sha: string | undefined;
+      try {
+        const getRes = await fetch(url, { headers });
+        if (getRes.ok) {
+          const fileData = await getRes.json();
+          sha = fileData.sha;
+        }
+      } catch (e) { /* File might not exist, that's okay */ }
+      
+      const body = JSON.stringify({
+        message: `[Backup] ${format(new Date(), "yyyy-MM-dd HH:mm:ss")}`,
+        content,
+        sha,
+      });
+
+      const res = await fetch(url, { method: "PUT", headers, body });
+
+      if (res.ok) {
+        const timestamp = `备份成功！(${format(new Date(), "HH:mm")})`;
+        setBackupStatus(timestamp);
+        localStorage.setItem("ziyin_last_backup_time", new Date().toISOString());
+        if (!isAuto) alert("备份成功！");
+      } else {
+        const errorData = await res.json();
+        throw new Error(errorData.message || "Unknown error");
+      }
+    } catch (err: any) {
+      console.error("GitHub backup error:", err);
+      setBackupStatus(`备份失败: ${err.message}`);
+      alert(`备份失败: ${err.message}`);
+    }
+  };
+
+  const handleGitHubRestore = async () => {
+    if (!githubToken || !githubRepo) {
+      alert("请先配置 GitHub Token 和仓库地址。");
+      return;
+    }
+    if (!confirm("确定要从 GitHub 恢复备份吗？这将覆盖你当前的所有本地数据。")) {
+      return;
+    }
+
+    setBackupStatus("正在从 GitHub 还原...");
+    const [owner, repo] = githubRepo.split("/");
+    const path = "ziyin-collection-backup.json";
+    const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
+    const headers = {
+      "Authorization": `token ${githubToken}`,
+      "Accept": "application/vnd.github.v3+json",
+    };
+
+    try {
+      const res = await fetch(url, { headers });
+      if (!res.ok) throw new Error("无法获取备份文件。");
+
+      const { content } = await res.json();
+      const decodedContent = decodeURIComponent(escape(atob(content)));
+      const restoredItems = JSON.parse(decodedContent);
+
+      if (Array.isArray(restoredItems)) {
+        await replaceDbItems(restoredItems);
+        setItems(restoredItems);
+        setBackupStatus(`还原成功！(${format(new Date(), "HH:mm")})`);
+        alert("从 GitHub 还原成功！");
+      } else {
+        throw new Error("备份文件格式不正确。");
+      }
+    } catch (err: any) {
+      console.error("GitHub restore error:", err);
+      setBackupStatus(`还原失败: ${err.message}`);
+      alert(`还原失败: ${err.message}`);
+    }
+  };
+
+
   // load
   useEffect(() => {
+    const lastBackupTime = localStorage.getItem("ziyin_last_backup_time");
+    if(lastBackupTime) {
+      setBackupStatus(`上次备份: ${format(parseISO(lastBackupTime), "yyyy-MM-dd HH:mm")}`);
+    }
+    
     (async () => {
       try {
         const isInitialized = localStorage.getItem(INIT_FLAG_KEY);
@@ -610,6 +716,24 @@ export default function App() {
     if (!dbReady || !dbLoaded) return;
     setDbValue(META_STORE, categories, META_CATEGORIES_KEY).catch(() => {});
   }, [categories, dbReady, dbLoaded]);
+
+  // Auto-backup effect
+  useEffect(() => {
+    if (autoBackupInterval === "never" || !dbLoaded) {
+      return;
+    }
+
+    const intervalHours = parseInt(autoBackupInterval);
+    if (isNaN(intervalHours) || intervalHours <= 0) return;
+
+    const intervalId = setInterval(() => {
+      console.log("执行自动备份...");
+      handleGitHubBackup(true);
+    }, intervalHours * 60 * 60 * 1000); // hours to ms
+
+    // Cleanup on unmount or when interval changes
+    return () => clearInterval(intervalId);
+  }, [autoBackupInterval, dbLoaded, githubToken, githubRepo, items]);
 
   const filtered = useMemo(() => {
     let list = [...items];
@@ -1145,6 +1269,73 @@ export default function App() {
                   </label>
                 </div>
               </div>
+              
+              {/* ImgBB图床设置 */}
+              <div className="bg-white rounded-[24px] border border-zinc-100 shadow-sm p-3">
+                <h3 className="text-[14px] font-medium flex items-center gap-1.5"><KeyRound className="size-4 text-sky-500" /> ImgBB 图床配置</h3>
+                <p className="text-[12px] text-zinc-500 mt-1">
+                  配置后，上传图片将自动存到图床。未配置则默认保存在浏览器本地。
+                  <a href="https://api.imgbb.com/" target="_blank" rel="noopener noreferrer" className="text-sky-600 underline">点此获取 API Key</a>。
+                </p>
+                <div className="mt-3 flex gap-2">
+                  <input
+                    id="imgbb_key"
+                    type="password"
+                    placeholder="ImgBB API Key"
+                    value={imgbbApiKey}
+                    onChange={(e) => setImgbbApiKey(e.target.value)}
+                    className="flex-1 h-9 px-3 rounded-xl bg-zinc-50 border border-zinc-200 text-[13px]"
+                  />
+                  <button onClick={()=>{
+                    localStorage.setItem("ziyin_imgbb_key", imgbbApiKey);
+                    alert("API Key已保存");
+                  }} className="h-9 px-3 rounded-xl bg-sky-500 text-white text-[13px]">保存</button>
+                </div>
+              </div>
+
+              {/* GitHub备份设置 */}
+              <div className="bg-white rounded-[24px] border border-zinc-100 shadow-sm p-3">
+                <h3 className="text-[14px] font-medium flex items-center gap-1.5"><UploadCloud className="size-4" /> GitHub 备份</h3>
+                <p className="text-[12px] text-zinc-500 mt-1">需要授予 repo 权限的 Personal Access Token</p>
+                <div className="mt-3 space-y-2">
+                   <input
+                    type="password"
+                    placeholder="GitHub Personal Access Token"
+                    value={githubToken}
+                    onChange={e => setGithubToken(e.target.value)}
+                    className="w-full h-9 px-3 rounded-xl bg-zinc-50 border border-zinc-200 text-[13px]"
+                  />
+                  <input
+                    placeholder="仓库地址, 例如 anarfox/ziyin-collection"
+                    value={githubRepo}
+                    onChange={e => setGithubRepo(e.target.value)}
+                    className="w-full h-9 px-3 rounded-xl bg-zinc-50 border border-zinc-200 text-[13px]"
+                  />
+                </div>
+                 <div className="mt-3 grid grid-cols-2 gap-2">
+                  <button onClick={() => {
+                    localStorage.setItem("ziyin_github_token", githubToken);
+                    localStorage.setItem("ziyin_github_repo", githubRepo);
+                    localStorage.setItem("ziyin_autobackup_interval", autoBackupInterval);
+                    alert("GitHub信息已保存");
+                  }} className="h-9 px-3 rounded-xl bg-zinc-800 text-white text-[13px]">保存配置</button>
+                  <select
+                    value={autoBackupInterval}
+                    onChange={e => setAutoBackupInterval(e.target.value)}
+                    className="h-9 px-2 rounded-xl bg-zinc-50 border border-zinc-200 text-[13px] text-center"
+                  >
+                    <option value="never">从不自动备份</option>
+                    <option value="1">每小时</option>
+                    <option value="6">每6小时</option>
+                    <option value="24">每天</option>
+                  </select>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <button onClick={() => handleGitHubBackup(false)} className="h-10 rounded-xl bg-zinc-100 text-zinc-900 text-[13px]">手动备份</button>
+                  <button onClick={handleGitHubRestore} className="h-10 rounded-xl bg-violet-50 text-violet-700 text-[13px]">从 GitHub 还原</button>
+                </div>
+                 {backupStatus && <p className="text-center text-xs mt-2 text-zinc-500">{backupStatus}</p>}
+              </div>
 
               <div className="bg-white rounded-[24px] border border-zinc-100 shadow-sm p-3">
                 <h3 className="text-[14px] font-medium">关于</h3>
@@ -1226,6 +1417,7 @@ function AddEditModal({ initial, categories, onClose, onSave, onDelete }:{
     notes: "",
   });
   const [tagInput, setTagInput] = useState(initial?.tags.join(",") || "");
+  const [isUploading, setIsUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleImage = async (f: File) => {
@@ -1238,12 +1430,40 @@ function AddEditModal({ initial, categories, onClose, onSave, onDelete }:{
       console.log(`Original image size: ${(f.size / 1024 / 1024).toFixed(2)} MB`);
       const compressedFile = await imageCompression(f, options);
       console.log(`Compressed image size: ${(compressedFile.size / 1024 / 1024).toFixed(2)} MB`);
-      const reader = new FileReader();
-      reader.onload = () => setForm({ ...form, image: reader.result as string });
-      reader.readAsDataURL(compressedFile);
+      
+      const apiKey = localStorage.getItem("ziyin_imgbb_key");
+      if (apiKey) {
+        setIsUploading(true);
+        const formData = new FormData();
+        formData.append("image", compressedFile);
+        try {
+          const res = await fetch(`https://api.imgbb.com/1/upload?key=${apiKey}`, {
+            method: "POST",
+            body: formData,
+          });
+          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+          const json = await res.json();
+          if (json.data?.url) {
+            setForm({ ...form, image: json.data.url });
+          } else {
+            throw new Error("ImgBB API did not return a URL.");
+          }
+        } catch (uploadError) {
+          console.error("ImgBB upload error:", uploadError);
+          alert("图片上传到ImgBB失败，将使用本地DataURL。");
+          const reader = new FileReader();
+          reader.onload = () => setForm({ ...form, image: reader.result as string });
+          reader.readAsDataURL(compressedFile);
+        } finally {
+          setIsUploading(false);
+        }
+      } else {
+        const reader = new FileReader();
+        reader.onload = () => setForm({ ...form, image: reader.result as string });
+        reader.readAsDataURL(compressedFile);
+      }
     } catch (error) {
       console.error("Image compression error:", error);
-      // 如果压缩失败，则使用原图
       const reader = new FileReader();
       reader.onload = () => setForm({ ...form, image: reader.result as string });
       reader.readAsDataURL(f);
@@ -1273,8 +1493,19 @@ function AddEditModal({ initial, categories, onClose, onSave, onDelete }:{
               <label className="text-[13px] font-medium flex items-center gap-1.5"><Camera className="size-4 text-violet-600" /> 拍照 / 相册</label>
               <span className="text-[11px] text-zinc-500">自动居中 · 美观卡片</span>
             </div>
-            <button onClick={()=>fileRef.current?.click()} className="w-full aspect-[16/9] rounded-[20px] border-2 border-dashed border-violet-200 bg-violet-50/50 overflow-hidden relative group">
-              {form.image ? (
+            <button
+              onClick={() => !isUploading && fileRef.current?.click()}
+              disabled={isUploading}
+              className="w-full aspect-[16/9] rounded-[20px] border-2 border-dashed border-violet-200 bg-violet-50/50 overflow-hidden relative group disabled:opacity-70 disabled:cursor-not-allowed"
+            >
+              {isUploading ? (
+                 <div className="w-full h-full grid place-items-center text-violet-600">
+                    <div className="text-center">
+                      <svg className="animate-spin size-8 mx-auto mb-1.5 opacity-70" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                      <p className="text-[13px] font-medium">图片上传中...</p>
+                    </div>
+                  </div>
+              ) : form.image ? (
                 <>
                   <img src={form.image} className="w-full h-full object-cover" />
                   <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition grid place-items-center opacity-0 group-hover:opacity-100">
